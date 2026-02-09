@@ -75,28 +75,6 @@ def grep_lines(text: str, patterns: List[str], max_hits: int = 80) -> List[str]:
             break
     return hits
 
-def read_klog(deep: bool) -> str:
-    if which("journalctl"):
-        args = ["journalctl", "-k", "-b", "0", "--no-pager"]
-        if not deep:
-            args += ["-n", "2000"]
-        rc, out = run(args, timeout=20)
-        if rc == 0 and out and "<failed" not in out:
-            return out
-    rc, out = run(["dmesg", "--color=never"], timeout=10)
-    return out
-
-def tool_section(lines: List[str], cmd: str, args: List[str]) -> None:
-    path = which(cmd)
-    if not path:
-        lines.append(f"[INFO] {cmd}: not installed (skipping)")
-        return
-    rc, out = run([cmd] + args, timeout=25)
-    if rc == 0:
-        lines.append(f"[INFO] {cmd} {' '.join(args)}:\n{out}")
-    else:
-        lines.append(f"[WARN] {cmd} failed (rc={rc}):\n{out}")
-
 def parse_cmdline() -> Dict[str, str]:
     cmdline = read_text(Path("/proc/cmdline")) or ""
     tokens = cmdline.split()
@@ -110,6 +88,197 @@ def parse_cmdline() -> Dict[str, str]:
     out["_raw"] = cmdline
     return out
 
+
+def ensure_debugfs_ready() -> Tuple[bool, str]:
+    if not DEBUGFS.is_dir():
+        return False, f"{DEBUGFS} not present"
+    if not DRI_DEBUGFS.is_dir():
+        return False, f"{DRI_DEBUGFS} not present (is debugfs mounted? try: sudo mount -t debugfs none /sys/kernel/debug)"
+    return True, "ok"
+
+def list_dri_debug_cards() -> List[int]:
+    if not DRI_DEBUGFS.is_dir():
+        return []
+    out = []
+    for p in DRI_DEBUGFS.iterdir():
+        if p.is_dir() and p.name.isdigit():
+            out.append(int(p.name))
+    return sorted(out)
+
+def pick_primary_card() -> Optional[int]:
+    # Simple heuristic: pick lowest card index in debugfs.
+    cards = list_dri_debug_cards()
+    return cards[0] if cards else None
+
+# ----------------------------check vblank event----------------------------------
+
+@dataclass
+class VBlankResult:
+    supported: bool
+    deltas: Dict[str, int]   # per counter file delta
+    details: str
+
+def _read_int(p: Path) -> Optional[int]:
+    t = read_text(p)
+    if t is None:
+        return None
+    m = re.search(r"(\d+)", t)
+    return int(m.group(1)) if m else None
+
+def check_vblank_events(card: int, interval_s: float = 0.5) -> VBlankResult:
+    """
+    Best-effort: looks for per-CRTC vblank counters in debugfs and checks if they increase.
+
+    It searches:
+      /sys/kernel/debug/dri/N/crtc-*/vblank_count
+      /sys/kernel/debug/dri/N/crtc-*/vblank
+      /sys/kernel/debug/dri/N/crtc-*/vblank_event
+    """
+    base = DRI_DEBUGFS / str(card)
+    if not base.is_dir():
+        return VBlankResult(False, {}, f"Missing: {base}")
+
+    counters: List[Path] = []
+    for crtc in base.glob("crtc-*"):
+        if not crtc.is_dir():
+            continue
+        for name in ("vblank_count", "vblank", "vblank_event"):
+            p = crtc / name
+            if p.exists():
+                counters.append(p)
+
+    if not counters:
+        return VBlankResult(False, {}, f"No vblank counters found under {base}/crtc-*")
+
+    before: Dict[str, int] = {}
+    after: Dict[str, int] = {}
+    for p in counters:
+        v = _read_int(p)
+        if v is not None:
+            before[str(p)] = v
+
+    time.sleep(interval_s)
+
+    for p in counters:
+        v = _read_int(p)
+        if v is not None:
+            after[str(p)] = v
+
+    deltas: Dict[str, int] = {}
+    for k, v0 in before.items():
+        v1 = after.get(k)
+        if v1 is not None:
+            deltas[k] = v1 - v0
+
+    return VBlankResult(True, deltas, "Non-zero delta usually means vblank is ticking for that CRTC")
+
+
+# --------------------------- check framebuffer flip------------------------------
+
+class FlipResult:
+    supported: bool
+    flips_seen: int
+    samples: int
+    details: str
+
+_FB_RE = re.compile(r"\bfb=([0-9]+)\b")
+
+def _extract_fb_ids_from_state(state_text: str) -> List[int]:
+    # Very generic: collect all "fb=<id>" occurrences.
+    return [int(m.group(1)) for m in _FB_RE.finditer(state_text)]
+
+def check_framebuffer_flips(card: int, samples: int = 10, interval_s: float = 0.2) -> FlipResult:
+    """
+    Returns flips_seen = number of times the set of fb IDs changed between samples.
+
+    Notes:
+    - If the desktop is static, flips may legitimately be 0.
+    - Move the mouse / animate a window during sampling to see flips.
+    """
+    state_path = DRI_DEBUGFS / str(card) / "state"
+    txt0 = read_text(state_path)
+    if txt0 is None:
+        return FlipResult(False, 0, 0, f"Missing/unreadable: {state_path}")
+
+    prev = sorted(set(_extract_fb_ids_from_state(txt0)))
+    flips = 0
+    for _ in range(samples - 1):
+        time.sleep(interval_s)
+        txt = read_text(state_path)
+        if txt is None:
+            break
+        cur = sorted(set(_extract_fb_ids_from_state(txt)))
+        if cur != prev:
+            flips += 1
+            prev = cur
+    return FlipResult(True, flips, samples, f"state={state_path} (fb ids change count)")
+
+# --------------------------check PHY power state and Panel power state-
+
+@dataclass
+class PsrAlpmResult:
+    supported: bool
+    psr_enabled: Optional[bool]
+    psr_active: Optional[bool]
+    alpm_active_hint: Optional[bool]
+    raw_excerpt: str
+    details: str
+
+def _bool_from_line(line: str) -> Optional[bool]:
+    # Common formats: "Enabled: yes/no", "PSR enabled: 1/0", "Active: yes/no"
+    l = line.strip().lower()
+    if any(x in l for x in ("yes", "enabled", ": 1", "=1")) and not any(x in l for x in ("no", ": 0", "=0", "disabled")):
+        return True
+    if any(x in l for x in ("no", "disabled", ": 0", "=0")):
+        return False
+    return None
+
+def check_psr_alpm_state(card: int) -> PsrAlpmResult:
+    """
+    Best-effort, vendor-specific:
+    - Strong support for Intel i915 via i915_edp_psr_status
+    - For other drivers, likely unsupported unless you extend it
+    """
+    base = DRI_DEBUGFS / str(card)
+    psr_path = base / "i915_edp_psr_status"
+    txt = read_text(psr_path)
+    if txt is None:
+        return PsrAlpmResult(False, None, None, None, "", f"Missing/unreadable: {psr_path} (i915-only)")
+
+    psr_enabled = None
+    psr_active = None
+    alpm_hint = None
+
+    excerpt_lines: List[str] = []
+    for line in txt.splitlines():
+        l = line.lower()
+
+        # PSR signals (formats differ slightly by kernel)
+        if "psr" in l and ("enabled" in l or "enable" in l):
+            b = _bool_from_line(line)
+            if b is not None and psr_enabled is None:
+                psr_enabled = b
+        if "psr" in l and ("active" in l or "state" in l):
+            # "Active: yes" / "PSR status: active"
+            if "active" in l and ("yes" in l or "active" in l):
+                psr_active = True
+            if "inactive" in l or "not active" in l:
+                psr_active = False
+
+        # ALPM hints (often appears as "ALPM" string)
+        if "alpm" in l:
+            # If file explicitly says active/enabled, capture it
+            if "enable" in l or "active" in l or "on" in l:
+                alpm_hint = True
+            if "disable" in l or "off" in l:
+                alpm_hint = False
+
+        # Keep a useful excerpt for reporting
+        if any(k in l for k in ("psr", "alpm", "sink", "source", "dc3", "link")):
+            excerpt_lines.append(line)
+
+    excerpt = "\n".join(excerpt_lines[:60])
+    return PsrAlpmResult(True, psr_enabled, psr_active, alpm_hint, excerpt, f"parsed from {psr_path}")
 
 # ------------------------- shared DRM helpers -------------------------
 
@@ -344,24 +513,20 @@ def run_flow_kms(deep: bool) -> Tuple[int, List[str]]:
     else:
         lines.append("[WARN] No connectors report connected (if you expect display: cable/hotplug/link training)")
 
-    # 6) Logs (link training / vblank/pageflip / power)
-    klog = read_klog(deep=deep)
-    link_pats = [r"link train", r"clock recovery", r"channel equal", r"\bAUX\b", r"\bDPCD\b", r"LTTPR", r"link status"]
-    vblank_pats = [r"vblank", r"page flip", r"pageflip", r"flip_done", r"drm.*event"]
-    power_pats = [r"\bPSR\b", r"\bALPM\b", r"Panel Self Refresh", r"runtime_pm", r"suspend", r"resume"]
+    # 6) runtime checkiong
+    card = pick_primary_card()
+    if card is None:
+        print("[WARN] no /sys/kernel/debug/dri/<N> found")
+        return 2
+    else:
+        flips = check_framebuffer_flips(card, samples=10, interval_s=0.2)
+        print(flips)
 
-    link_hits = grep_lines(klog, link_pats, max_hits=30)
-    vblank_hits = grep_lines(klog, vblank_pats, max_hits=30)
-    power_hits = grep_lines(klog, power_pats, max_hits=30)
+        vb = check_vblank_events(card, interval_s=0.5)
+        print(vb)
 
-    lines.append(f"[INFO] log hints: link={len(link_hits)}, vblank/flip={len(vblank_hits)}, power={len(power_hits)}")
-    if deep:
-        if link_hits:
-            lines.append("[INFO] Log sample (link training):\n" + "\n".join(link_hits))
-        if vblank_hits:
-            lines.append("[INFO] Log sample (vblank/pageflip):\n" + "\n".join(vblank_hits))
-        if power_hits:
-            lines.append("[INFO] Log sample (power/PSR/ALPM):\n" + "\n".join(power_hits))
+        psr_alpm = check_psr_alpm_state(card)
+        print(psr_alpm)
 
     # Exit: fail only if major KMS prerequisites are missing
     return 0, lines
