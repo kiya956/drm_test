@@ -191,91 +191,6 @@ def runtime_pm_info(card: Path) -> Dict[str, str]:
             out[k] = t
     return out
 
-# ------------------------- driver modeset check -------------------------
-
-
-@dataclass
-class ModesetGate:
-    kms_explicitly_disabled: bool          # True => you should EXPECT no KMS
-    reasons: List[str]                     # human readable reasons
-    evidence: Dict[str, str]               # raw key->value evidence collected
-
-def check_modeset_gates() -> ModesetGate:
-    """
-    Checks common ways KMS/modesetting gets disabled.
-
-    Interpreting output:
-    - kms_explicitly_disabled=True means: KMS is probably intentionally off.
-      You can surface this before checking /dev/dri to avoid confusion.
-    - reasons explains which knob is responsible.
-    - evidence has raw values for reporting.
-
-    Notes:
-    - This is best-effort and covers common drivers: i915, amdgpu, radeon, nvidia_drm.
-    - Some platforms may use different params; extend as needed.
-    """
-    evidence: Dict[str, str] = {}
-    reasons: List[str] = []
-    disabled = False
-
-    cmd = _parse_cmdline()
-    evidence["cmdline"] = cmd.get("_raw", "")
-
-    # Kernel-level hard disable
-    if "nomodeset" in cmd:
-        disabled = True
-        reasons.append("nomodeset present on kernel cmdline (global KMS disable)")
-
-    # Driver/module parameter gates (most common)
-    # NVIDIA: nvidia_drm.modeset=0 disables DRM KMS
-    v = _module_param("nvidia_drm", "modeset")
-    if v is not None:
-        evidence["nvidia_drm.modeset"] = v
-        if v.strip() == "0":
-            disabled = True
-            reasons.append("nvidia_drm.modeset=0 (NVIDIA DRM KMS disabled)")
-
-    # Intel i915: i915.modeset=0 disables i915 KMS (older + still exists)
-    v = _module_param("i915", "modeset")
-    if v is not None:
-        evidence["i915.modeset"] = v
-        if v.strip() == "0":
-            disabled = True
-            reasons.append("i915.modeset=0 (Intel i915 KMS disabled)")
-
-    # AMD radeon: radeon.modeset=0 disables radeon KMS
-    v = _module_param("radeon", "modeset")
-    if v is not None:
-        evidence["radeon.modeset"] = v
-        if v.strip() == "0":
-            disabled = True
-            reasons.append("radeon.modeset=0 (Radeon KMS disabled)")
-
-    # AMD amdgpu: "dc" controls display core in some configs (0 => legacy/non-DC path)
-    # Not always a hard 'no KMS', but often strongly impacts display bring-up.
-    v = _module_param("amdgpu", "dc")
-    if v is not None:
-        evidence["amdgpu.dc"] = v
-        if v.strip() == "0":
-            reasons.append("amdgpu.dc=0 (Display Core disabled; may affect KMS/display features)")
-
-    # Also look for cmdline forms like i915.modeset=0 / nvidia_drm.modeset=0
-    # (Some distros pass these on cmdline rather than modprobe.d)
-    for key in ["i915.modeset", "nvidia_drm.modeset", "radeon.modeset", "amdgpu.dc"]:
-        if key in cmd:
-            evidence[f"cmdline.{key}"] = cmd[key]
-            if key.endswith(".modeset") and cmd[key].strip() == "0":
-                disabled = True
-                reasons.append(f"{key}=0 on kernel cmdline (driver KMS disabled)")
-            if key == "amdgpu.dc" and cmd[key].strip() == "0":
-                reasons.append("amdgpu.dc=0 on kernel cmdline (may affect display features)")
-
-    if not reasons:
-        reasons.append("No obvious modeset/KMS disable knobs detected")
-
-    return ModesetGate(kms_explicitly_disabled=disabled, reasons=reasons, evidence=evidence)
-
-
 # ------------------------- Flow A: nomodeset / fbdev -------------------------
 
 def run_flow_nomodeset(deep: bool) -> Tuple[int, List[str]]:
@@ -370,15 +285,7 @@ def run_flow_kms(deep: bool) -> Tuple[int, List[str]]:
         lines.append("[FAIL] DRM cards exist but none show a bound driver: probe/bind issue")
         return 2, lines
 
-    # 3) check driver modeset
-    gate = check_modeset_gates()
-    print(gate.kms_explicitly_disabled)
-    for r in gate.reasons:
-        print(" -", r)
-    for k, v in gate.evidence.items():
-        print(k, "=", v)
-
-    # 4) /dev/dri nodes
+    # 3) /dev/dri nodes
     dri_nodes = list_dev_dri_nodes()
     if not dri_nodes:
         lines.append("[FAIL] /dev/dri missing/empty: udev/devtmpfs nodes not created")
@@ -397,7 +304,7 @@ def run_flow_kms(deep: bool) -> Tuple[int, List[str]]:
     else:
         lines.append("[WARN] No /dev/dri/renderD*: Mesa may fall back to llvmpipe or rendering may fail")
 
-    # 5) KMS gating module params
+    # 4) KMS gating module params
     params = []
     for mod, param in [("nvidia_drm", "modeset"), ("i915", "modeset"), ("amdgpu", "dc"), ("radeon", "modeset")]:
         v = module_param(mod, param)
@@ -408,7 +315,7 @@ def run_flow_kms(deep: bool) -> Tuple[int, List[str]]:
         lines.append("[FAIL] nvidia_drm.modeset=0: KMS disabled for NVIDIA DRM (often black screen on Wayland)")
         return 2, lines
 
-    # 6) Connection / EDID / modes
+    # 5) Connection / EDID / modes
     any_connected = False
     for c in cards:
         conns = drm_connectors_for(c)
@@ -437,7 +344,7 @@ def run_flow_kms(deep: bool) -> Tuple[int, List[str]]:
     else:
         lines.append("[WARN] No connectors report connected (if you expect display: cable/hotplug/link training)")
 
-    # 7) Logs (link training / vblank/pageflip / power)
+    # 6) Logs (link training / vblank/pageflip / power)
     klog = read_klog(deep=deep)
     link_pats = [r"link train", r"clock recovery", r"channel equal", r"\bAUX\b", r"\bDPCD\b", r"LTTPR", r"link status"]
     vblank_pats = [r"vblank", r"page flip", r"pageflip", r"flip_done", r"drm.*event"]
