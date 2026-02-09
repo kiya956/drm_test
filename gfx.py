@@ -363,18 +363,6 @@ def run_flow_kms(deep: bool) -> Tuple[int, List[str]]:
         if power_hits:
             lines.append("[INFO] Log sample (power/PSR/ALPM):\n" + "\n".join(power_hits))
 
-    # 7) Optional tools (best confirmation of KMS objects)
-    if deep:
-        if is_root():
-            lines.append("[INFO] deep mode: root detected")
-        else:
-            lines.append("[INFO] deep mode: not root (some info may be limited)")
-
-        tool_section(lines, "modetest", ["-c"])
-        tool_section(lines, "modetest", ["-p"])
-        tool_section(lines, "kmsprint", [])
-        tool_section(lines, "drm_info", [])
-
     # Exit: fail only if major KMS prerequisites are missing
     return 0, lines
 
@@ -383,8 +371,6 @@ def run_flow_kms(deep: bool) -> Tuple[int, List[str]]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--deep", action="store_true",
-                    help="More logs + optional tools (sudo recommended).")
     ap.add_argument("--expect-kms", action="store_true",
                     help="Treat missing KMS pieces as FAIL (desktop expectation).")
     args = ap.parse_args()
