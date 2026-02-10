@@ -329,8 +329,8 @@ def check_psr_alpm_state(card: int) -> PsrAlpmResult:
             excerpt_lines.append(line)
 
     excerpt = "\n".join(excerpt_lines[:60])
-    print(PsrAlpmResult(True, psr_enabled, psr_active, alpm_hint, excerpt, f"parsed from {psr_path}"))
-    return
+    print("[INFO] PSR/ALPM details: ", PsrAlpmResult(True, psr_enabled, psr_active, alpm_hint, excerpt, f"parsed from {psr_path}"))
+    return not psr_active and not alpm_hint
 
 # ------------------------- shared DRM helpers -------------------------
 
@@ -582,7 +582,10 @@ def run_flow_kms():
             print("[FAIL] framebuffer has no flips")
 
         psr_alpm = check_psr_alpm_state(card)
-        print(psr_alpm)
+        if psr_alpm:
+            print("[PASS] PSR/ALPM status is ok")
+        else:
+            print("[FAIL] PSR/ALPM status is abnormal")
 
     # Exit: fail only if major KMS prerequisites are missing
     return 0
