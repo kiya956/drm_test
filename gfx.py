@@ -362,7 +362,7 @@ def runtime_pm_info(card: Path) -> Dict[str, str]:
 
 # ------------------------- Flow A: nomodeset / fbdev -------------------------
 
-def run_flow_nomodeset(deep: bool) -> Tuple[int, List[str]]:
+def run_flow_nomodeset() -> Tuple[int, List[str]]:
     lines: List[str] = []
     lines.append("[INFO] Flow: nomodeset (fbdev / firmware framebuffer)")
 
@@ -415,7 +415,7 @@ def run_flow_nomodeset(deep: bool) -> Tuple[int, List[str]]:
 
 # ------------------------- Flow B: normal DRM/KMS -------------------------
 
-def run_flow_kms(deep: bool) -> Tuple[int, List[str]]:
+def run_flow_kms() -> Tuple[int, List[str]]:
     lines: List[str] = []
     lines.append("[INFO] Flow: normal DRM/KMS")
 
@@ -550,9 +550,9 @@ def main() -> int:
         # logging.error("The system run with nomodeset but we expected KMS.")
         # raise SystemExit("FAIL: RPMSG channel is not created") 
     elif nomodeset:
-        rc, lines = run_flow_nomodeset(deep=args.deep)
+        rc, lines = run_flow_nomodeset()
     else:
-        rc, lines = run_flow_kms(deep=args.deep)
+        rc, lines = run_flow_kms()
 
     print("\n".join(lines))
     return rc
