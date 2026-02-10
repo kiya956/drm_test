@@ -30,6 +30,7 @@ from typing import Dict, List, Optional, Tuple
 
 DEBUGFS = Path("/sys/kernel/debug")
 DRI_DEBUGFS = DEBUGFS / "dri"
+TRACEFS = Path("/sys/kernel/tracing")
 
 # ------------------------- helpers -------------------------
 
@@ -123,67 +124,111 @@ def pick_primary_card() -> Optional[int]:
 
 # ----------------------------check vblank event----------------------------------
 
-@dataclass
-class VBlankResult:
-    supported: bool
-    deltas: Dict[str, int]   # per counter file delta
-    details: str
 
-def _read_int(p: Path) -> Optional[int]:
-    t = read_text(p)
-    if t is None:
+
+def _write(path: Path, data: str) -> None:
+    path.write_text(data, encoding="utf-8")
+
+def _exists_enable_file(ev: str) -> Optional[Path]:
+    # "drm:drm_vblank_event" -> /sys/kernel/tracing/events/drm/drm_vblank_event/enable
+    if ":" not in ev:
         return None
-    m = re.search(r"(\d+)", t)
-    return int(m.group(1)) if m else None
+    cat, name = ev.split(":", 1)
+    p = TRACEFS / "events" / cat / name / "enable"
+    return p if p.exists() else None
 
-def check_vblank_events(card: int, interval_s: float = 0.5) -> VBlankResult:
+def disable_all_drm_events() -> int:
     """
-    Best-effort: looks for per-CRTC vblank counters in debugfs and checks if they increase.
+    Equivalent to:
+      for p in events/drm/*/enable; do echo 0 > "$p" 2>/dev/null || true; done
 
-    It searches:
-      /sys/kernel/debug/dri/N/crtc-*/vblank_count
-      /sys/kernel/debug/dri/N/crtc-*/vblank
-      /sys/kernel/debug/dri/N/crtc-*/vblank_event
+    Returns how many enable files we attempted to disable.
     """
-    base = DRI_DEBUGFS / str(card)
+    base = TRACEFS / "events" / "drm"
     if not base.is_dir():
-        return VBlankResult(False, {}, f"Missing: {base}")
+        return 0
+    count = 0
+    for enable_file in base.glob("*/enable"):
+        try:
+            _write(enable_file, "0")
+        except Exception:
+            # ignore permission / missing etc, like the bash '|| true'
+            pass
+        count += 1
+    return count
 
-    counters: List[Path] = []
-    for crtc in base.glob("crtc-*"):
-        if not crtc.is_dir():
-            continue
-        for name in ("vblank_count", "vblank", "vblank_event"):
-            p = crtc / name
-            if p.exists():
-                counters.append(p)
+def count_trace_lines() -> int:
+    """
+    Equivalent to: grep -c "" trace
+    Counts lines in /sys/kernel/tracing/trace
+    """
+    trace_path = TRACEFS / "trace"
+    try:
+        # read in one shot; trace is usually manageable after a short capture
+        txt = trace_path.read_text(errors="replace")
+        # count lines; if file ends without newline, splitlines still counts correctly
+        return len(txt.splitlines())
+    except Exception:
+        return -1
 
-    if not counters:
-        return VBlankResult(False, {}, f"No vblank counters found under {base}/crtc-*")
+def capture_drm_trace(
+    duration_s: int = 10,
+    events: Optional[List[str]] = None,
+    read_trace: bool = True,
+    max_chars: int = 20000,
+    cleanup_disable_all: bool = True,
+) -> TraceCaptureResult:
+    """
+    Python version of your tracefs script + count lines + disable all drm events.
+    Requires root (or tracefs write permission).
+    """
+    try:
+        if not TRACEFS.is_dir():
+            return TraceCaptureResult(False, [], 0, "", -1, "", "tracefs not mounted at /sys/kernel/tracing")
 
-    before: Dict[str, int] = {}
-    after: Dict[str, int] = {}
-    for p in counters:
-        v = _read_int(p)
-        if v is not None:
-            before[str(p)] = v
+        if events is None:
+            events = [
+                "drm:drm_atomic_commit",
+                "drm:drm_vblank_event",
+                "drm:drm_vblank_event_delivered",
+            ]
 
-    time.sleep(interval_s)
+        # Stop tracing + clear buffer
+        _write(TRACEFS / "tracing_on", "0")
+        _write(TRACEFS / "trace", "")
 
-    for p in counters:
-        v = _read_int(p)
-        if v is not None:
-            after[str(p)] = v
+        enabled: List[str] = []
+        for ev in events:
+            enable_file = _exists_enable_file(ev)
+            if enable_file:
+                _write(enable_file, "1")
+                enabled.append(ev)
 
-    deltas: Dict[str, int] = {}
-    for k, v0 in before.items():
-        v1 = after.get(k)
-        if v1 is not None:
-            deltas[k] = v1 - v0
+        # Capture
+        _write(TRACEFS / "tracing_on", "1")
+        time.sleep(duration_s)
+        _write(TRACEFS / "tracing_on", "0")
 
-    print(VBlankResult(True, deltas, "Non-zero delta usually means vblank is ticking for that CRTC"))
-    return
+        # Count lines (events)
+        line_count = count_trace_lines()
 
+        # Cleanup: disable all drm events
+        disabled_n = 0
+        if cleanup_disable_all:
+            disabled_n = disable_all_drm_events()
+
+        trace_path = str(TRACEFS / "trace")
+        excerpt = ""
+        if read_trace:
+            t = (TRACEFS / "trace").read_text(errors="replace")
+            excerpt = t[:max_chars] + ("\n<...truncated...>\n" if len(t) > max_chars else "")
+
+        return line_count
+
+    except PermissionError as e:
+        return TraceCaptureResult(False, [], 0, "", -1, "", f"permission denied (run as root): {e}")
+    except Exception as e:
+        return TraceCaptureResult(False, [], 0, "", -1, "", f"error: {e}")
 
 # --------------------------- check framebuffer flip------------------------------
 
@@ -532,11 +577,14 @@ def run_flow_kms():
         print("[WARN] no /sys/kernel/debug/dri/<N> found")
         return 2
     else:
+        vb = capture_drm_trace(duration_s=10)
+        if vb:
+            print(f"[PASS] check vblank_event count: {vb}")
+        else:
+            print(f"[FAIL] no vblan found")
+
         flips = check_framebuffer_flips(card, samples=10, interval_s=2)
         print(flips)
-
-        vb = check_vblank_events(card, interval_s=0.5)
-        print(vb)
 
         psr_alpm = check_psr_alpm_state(card)
         print(psr_alpm)
