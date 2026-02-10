@@ -419,7 +419,7 @@ def run_flow_nomodeset():
 
     fb0 = Path("/dev/fb0")
     if fb0.exists():
-        print("[OK] /dev/fb0 exists (fbdev path available)")
+        print("[PASS] /dev/fb0 exists (fbdev path available)")
     else:
         print("[FAIL] /dev/fb0 missing (expected with nomodeset). Check efifb/simplefb/vesafb/simpledrm.")
         # still continue to gather hints
@@ -480,7 +480,7 @@ def run_flow_kms():
     if not cards:
         print("[FAIL] No /sys/class/drm/cardN found: DRM device not registered (driver missing/not bound?)")
         return 2, lines
-    print("[OK] Found DRM cards: " + ", ".join(c.name for c in cards))
+    print("[PASS] Found DRM cards: " + ", ".join(c.name for c in cards))
 
     # 2) Driver bound
     any_driver = False
@@ -489,7 +489,7 @@ def run_flow_kms():
         ident = device_identity(c)
         if drv:
             any_driver = True
-            print(f"[OK] {c.name}: driver bound = {drv}")
+            print(f"[PASS] {c.name}: driver bound = {drv}")
         else:
             print(f"[WARN] {c.name}: no driver bound symlink")
         if ident:
@@ -516,10 +516,10 @@ def run_flow_kms():
     if not has_card:
         print("[FAIL] No /dev/dri/card*: compositor cannot open KMS")
         return 2, lines
-    print("[OK] /dev/dri/card* present (KMS node)")
+    print("[PASS] /dev/dri/card* present (KMS node)")
 
     if has_render:
-        print("[OK] /dev/dri/renderD* present (render node)")
+        print("[PASS] /dev/dri/renderD* present (render node)")
     else:
         print("[WARN] No /dev/dri/renderD*: Mesa may fall back to llvmpipe or rendering may fail")
 
@@ -559,7 +559,7 @@ def run_flow_kms():
                     print(f"[WARN] {ci['name']}: link_status={link_status}")
 
     if any_connected:
-        print("[OK] At least one connector is connected")
+        print("[PASS] At least one connector is connected")
     else:
         print("[WARN] No connectors report connected (if you expect display: cable/hotplug/link training)")
 
