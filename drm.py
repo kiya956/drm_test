@@ -437,7 +437,7 @@ def run_flow_nomodeset():
             except Exception:
                 pass
     else:
-        print("[WARN] /sys/class/graphics/fb0 not found; fbdev sysfs info missing")
+        print("[FAIL] /sys/class/graphics/fb0 not found; fbdev sysfs info missing")
 
     # kernel log hints for fb drivers
     klog = read_klog(deep=deep)
@@ -488,7 +488,7 @@ def run_flow_kms():
             any_driver = True
             print(f"[PASS] {c.name}: driver bound = {drv}")
         else:
-            print(f"[WARN] {c.name}: no driver bound symlink")
+            print(f"[FAIL] {c.name}: no driver bound symlink")
         if ident:
             brief = ", ".join(f"{k}={v}" for k, v in ident.items() if k in ("DRIVER", "PCI_ID", "vendor", "device", "class"))
             print(f"[INFO] {c.name}: identity: {brief or '<partial>'}")
@@ -518,7 +518,7 @@ def run_flow_kms():
     if has_render:
         print("[PASS] /dev/dri/renderD* present (render node)")
     else:
-        print("[WARN] No /dev/dri/renderD*: Mesa may fall back to llvmpipe or rendering may fail")
+        print("[FAIL] No /dev/dri/renderD*: Mesa may fall back to llvmpipe or rendering may fail")
 
     # 4) KMS gating module params
     params = []
@@ -536,7 +536,6 @@ def run_flow_kms():
     for c in cards:
         conns = drm_connectors_for(c)
         if not conns:
-            print(f"[WARN] {c.name}: no connectors found (headless/render-only?)")
             continue
         for conn in conns:
             ci = connector_info(conn)
@@ -549,21 +548,21 @@ def run_flow_kms():
             if status == "connected":
                 any_connected = True
                 if len(modes) == 0:
-                    print(f"[WARN] {ci['name']}: connected but no modes (EDID/AUX/DDC/link issue)")
+                    print(f"[FAIL] {ci['name']}: connected but no modes (EDID/AUX/DDC/link issue)")
                 if edid_bytes in ("0", "", "?"):
                     print(f"[WARN] {ci['name']}: EDID size suspicious (edid_bytes={edid_bytes})")
                 if link_status and link_status.lower() != "good":
-                    print(f"[WARN] {ci['name']}: link_status={link_status}")
+                    print(f"[FAIL] {ci['name']}: link_status={link_status}")
 
     if any_connected:
         print("[PASS] At least one connector is connected")
     else:
-        print("[WARN] No connectors report connected (if you expect display: cable/hotplug/link training)")
+        print("[FAIL] No connectors report connected (if you expect display: cable/hotplug/link training)")
 
     # 6) runtime checkiong
     card = pick_primary_card()
     if card is None:
-        print("[WARN] no /sys/kernel/debug/dri/<N> found")
+        print("[FAIL] no /sys/kernel/debug/dri/<N> found")
         return 2
     else:
         vb = capture_drm_trace(duration_s=10)
