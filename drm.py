@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 """
-gfx_diag.py — Split test flow by nomodeset
-
 Flow A (nomodeset):
   - Validate fbdev / firmware framebuffer path (/dev/fb0, efifb/simplefb/vesafb)
   - Optionally collect DRM render-only info as INFO (not required for display)
@@ -10,10 +8,6 @@ Flow B (normal):
   - Device registered -> driver bound -> DRM sysfs -> /dev/dri -> connectors/EDID/modes
   - Logs for link training / vblank/pageflip / power
   - Optional tools in --deep (modetest/kmsprint/drm_info)
-
-Run:
-  python3 gfx_diag.py
-  sudo python3 gfx_diag.py --deep --expect-kms
 """
 
 from __future__ import annotations
