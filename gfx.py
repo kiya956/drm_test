@@ -173,7 +173,8 @@ def check_vblank_events(card: int, interval_s: float = 0.5) -> VBlankResult:
         if v1 is not None:
             deltas[k] = v1 - v0
 
-    return VBlankResult(True, deltas, "Non-zero delta usually means vblank is ticking for that CRTC")
+    print(VBlankResult(True, deltas, "Non-zero delta usually means vblank is ticking for that CRTC"))
+    return
 
 
 # --------------------------- check framebuffer flip------------------------------
@@ -215,7 +216,8 @@ def check_framebuffer_flips(card: int, samples: int = 10, interval_s: float = 0.
         if cur != prev:
             flips += 1
             prev = cur
-    return FlipResult(True, flips, samples, f"state={state_path} (fb ids change count)")
+    print(FlipResult(True, flips, samples, f"state={state_path} (fb ids change count)"))
+    return
 
 # --------------------------check PHY power state and Panel power state-
 
@@ -282,7 +284,8 @@ def check_psr_alpm_state(card: int) -> PsrAlpmResult:
             excerpt_lines.append(line)
 
     excerpt = "\n".join(excerpt_lines[:60])
-    return PsrAlpmResult(True, psr_enabled, psr_active, alpm_hint, excerpt, f"parsed from {psr_path}")
+    print(PsrAlpmResult(True, psr_enabled, psr_active, alpm_hint, excerpt, f"parsed from {psr_path}"))
+    return
 
 # ------------------------- shared DRM helpers -------------------------
 
@@ -366,15 +369,14 @@ def runtime_pm_info(card: Path) -> Dict[str, str]:
 
 # ------------------------- Flow A: nomodeset / fbdev -------------------------
 
-def run_flow_nomodeset() -> Tuple[int, List[str]]:
-    lines: List[str] = []
-    lines.append("[INFO] Flow: nomodeset (fbdev / firmware framebuffer)")
+def run_flow_nomodeset():
+    print("[INFO] Flow: nomodeset (fbdev / firmware framebuffer)")
 
     fb0 = Path("/dev/fb0")
     if fb0.exists():
-        lines.append("[OK] /dev/fb0 exists (fbdev path available)")
+        print("[OK] /dev/fb0 exists (fbdev path available)")
     else:
-        lines.append("[FAIL] /dev/fb0 missing (expected with nomodeset). Check efifb/simplefb/vesafb/simpledrm.")
+        print("[FAIL] /dev/fb0 missing (expected with nomodeset). Check efifb/simplefb/vesafb/simpledrm.")
         # still continue to gather hints
 
     # sysfs fb info
@@ -383,34 +385,34 @@ def run_flow_nomodeset() -> Tuple[int, List[str]]:
         for f in ["name", "modes", "virtual_size", "stride", "bits_per_pixel"]:
             t = read_text(fb_sys / f)
             if t is not None:
-                lines.append(f"[INFO] fb0 {f}: {t}")
+                print(f"[INFO] fb0 {f}: {t}")
         # driver symlink if present
         drv = fb_sys / "device" / "driver"
         if drv.exists():
             try:
                 if drv.is_symlink():
-                    lines.append(f"[INFO] fb0 driver: {Path(os.readlink(str(drv))).name}")
+                    print(f"[INFO] fb0 driver: {Path(os.readlink(str(drv))).name}")
             except Exception:
                 pass
     else:
-        lines.append("[WARN] /sys/class/graphics/fb0 not found; fbdev sysfs info missing")
+        print("[WARN] /sys/class/graphics/fb0 not found; fbdev sysfs info missing")
 
     # kernel log hints for fb drivers
     klog = read_klog(deep=deep)
     fb_pats = [r"\befifb\b", r"\bvesafb\b", r"\bsimplefb\b", r"\bsimpledrm\b", r"framebuffer"]
     fb_hits = grep_lines(klog, fb_pats, max_hits=60)
     if fb_hits:
-        lines.append("[INFO] Log sample (fbdev/firmware framebuffer):\n" + "\n".join(fb_hits[:60]))
+        print("[INFO] Log sample (fbdev/firmware framebuffer):\n" + "\n".join(fb_hits[:60]))
     else:
-        lines.append("[INFO] No obvious fbdev driver lines found in logs (may be quiet on some systems).")
+        print("[INFO] No obvious fbdev driver lines found in logs (may be quiet on some systems).")
 
     # Optional: collect DRM presence as informational only
     sys_drm = list_sys_class_drm()
     dri_nodes = list_dev_dri_nodes()
-    lines.append(f"[INFO] /sys/class/drm entries: {', '.join(p.name for p in sys_drm) if sys_drm else '<none>'}")
-    lines.append(f"[INFO] /dev/dri nodes: {', '.join(dri_nodes) if dri_nodes else '<none>'}")
+    print(f"[INFO] /sys/class/drm entries: {', '.join(p.name for p in sys_drm) if sys_drm else '<none>'}")
+    print(f"[INFO] /dev/dri nodes: {', '.join(dri_nodes) if dri_nodes else '<none>'}")
     if any(n.startswith("renderD") for n in dri_nodes):
-        lines.append("[INFO] renderD* exists even with nomodeset (compute/render may still be possible; display KMS is disabled).")
+        print("[INFO] renderD* exists even with nomodeset (compute/render may still be possible; display KMS is disabled).")
 
     # Exit logic: in nomodeset flow, missing /dev/fb0 is the main hard failure.
     rc = 2 if not fb0.exists() else 0
@@ -419,22 +421,21 @@ def run_flow_nomodeset() -> Tuple[int, List[str]]:
 
 # ------------------------- Flow B: normal DRM/KMS -------------------------
 
-def run_flow_kms() -> Tuple[int, List[str]]:
-    lines: List[str] = []
-    lines.append("[INFO] Flow: normal DRM/KMS")
+def run_flow_kms():
+    print("[INFO] Flow: normal DRM/KMS")
 
     # 1) DRM registered (sysfs)
     sys_drm = list_sys_class_drm()
     if not sys_drm:
-        lines.append("[FAIL] /sys/class/drm missing/empty: DRM not exporting state (driver not loaded/bound?)")
+        print("[FAIL] /sys/class/drm missing/empty: DRM not exporting state (driver not loaded/bound?)")
         return 2, lines
-    lines.append("[INFO] /sys/class/drm entries: " + ", ".join(p.name for p in sys_drm))
+    print("[INFO] /sys/class/drm entries: " + ", ".join(p.name for p in sys_drm))
 
     cards = drm_cards()
     if not cards:
-        lines.append("[FAIL] No /sys/class/drm/cardN found: DRM device not registered (driver missing/not bound?)")
+        print("[FAIL] No /sys/class/drm/cardN found: DRM device not registered (driver missing/not bound?)")
         return 2, lines
-    lines.append("[OK] Found DRM cards: " + ", ".join(c.name for c in cards))
+    print("[OK] Found DRM cards: " + ", ".join(c.name for c in cards))
 
     # 2) Driver bound
     any_driver = False
@@ -443,39 +444,39 @@ def run_flow_kms() -> Tuple[int, List[str]]:
         ident = device_identity(c)
         if drv:
             any_driver = True
-            lines.append(f"[OK] {c.name}: driver bound = {drv}")
+            print(f"[OK] {c.name}: driver bound = {drv}")
         else:
-            lines.append(f"[WARN] {c.name}: no driver bound symlink")
+            print(f"[WARN] {c.name}: no driver bound symlink")
         if ident:
             brief = ", ".join(f"{k}={v}" for k, v in ident.items() if k in ("DRIVER", "PCI_ID", "vendor", "device", "class"))
-            lines.append(f"[INFO] {c.name}: identity: {brief or '<partial>'}")
+            print(f"[INFO] {c.name}: identity: {brief or '<partial>'}")
 
         pm = runtime_pm_info(c)
         if pm:
-            lines.append("[INFO] " + f"{c.name} runtime PM: " + ", ".join(f"{k}={v}" for k, v in pm.items()))
+            print("[INFO] " + f"{c.name} runtime PM: " + ", ".join(f"{k}={v}" for k, v in pm.items()))
 
     if not any_driver:
-        lines.append("[FAIL] DRM cards exist but none show a bound driver: probe/bind issue")
+        print("[FAIL] DRM cards exist but none show a bound driver: probe/bind issue")
         return 2, lines
 
     # 3) /dev/dri nodes
     dri_nodes = list_dev_dri_nodes()
     if not dri_nodes:
-        lines.append("[FAIL] /dev/dri missing/empty: udev/devtmpfs nodes not created")
+        print("[FAIL] /dev/dri missing/empty: udev/devtmpfs nodes not created")
         return 2, lines
-    lines.append("[INFO] /dev/dri nodes: " + ", ".join(dri_nodes))
+    print("[INFO] /dev/dri nodes: " + ", ".join(dri_nodes))
 
     has_card = any(n.startswith("card") for n in dri_nodes)
     has_render = any(n.startswith("renderD") for n in dri_nodes)
     if not has_card:
-        lines.append("[FAIL] No /dev/dri/card*: compositor cannot open KMS")
+        print("[FAIL] No /dev/dri/card*: compositor cannot open KMS")
         return 2, lines
-    lines.append("[OK] /dev/dri/card* present (KMS node)")
+    print("[OK] /dev/dri/card* present (KMS node)")
 
     if has_render:
-        lines.append("[OK] /dev/dri/renderD* present (render node)")
+        print("[OK] /dev/dri/renderD* present (render node)")
     else:
-        lines.append("[WARN] No /dev/dri/renderD*: Mesa may fall back to llvmpipe or rendering may fail")
+        print("[WARN] No /dev/dri/renderD*: Mesa may fall back to llvmpipe or rendering may fail")
 
     # 4) KMS gating module params
     params = []
@@ -483,9 +484,9 @@ def run_flow_kms() -> Tuple[int, List[str]]:
         v = module_param(mod, param)
         if v is not None:
             params.append(f"{mod}.{param}={v}")
-    lines.append("[INFO] modeset params: " + (", ".join(params) if params else "<none readable>"))
+    print("[INFO] modeset params: " + (", ".join(params) if params else "<none readable>"))
     if any(p.startswith("nvidia_drm.modeset=0") for p in params):
-        lines.append("[FAIL] nvidia_drm.modeset=0: KMS disabled for NVIDIA DRM (often black screen on Wayland)")
+        print("[FAIL] nvidia_drm.modeset=0: KMS disabled for NVIDIA DRM (often black screen on Wayland)")
         return 2, lines
 
     # 5) Connection / EDID / modes
@@ -493,7 +494,7 @@ def run_flow_kms() -> Tuple[int, List[str]]:
     for c in cards:
         conns = drm_connectors_for(c)
         if not conns:
-            lines.append(f"[WARN] {c.name}: no connectors found (headless/render-only?)")
+            print(f"[WARN] {c.name}: no connectors found (headless/render-only?)")
             continue
         for conn in conns:
             ci = connector_info(conn)
@@ -501,21 +502,21 @@ def run_flow_kms() -> Tuple[int, List[str]]:
             modes = (ci.get("modes") or "").splitlines()
             edid_bytes = ci.get("edid_bytes", "0")
             link_status = (ci.get("link_status") or "").strip()
-            lines.append(f"[INFO] {ci['name']}: status={status or '<unknown>'}, edid_bytes={edid_bytes}, modes={len(modes)}" +
+            print(f"[INFO] {ci['name']}: status={status or '<unknown>'}, edid_bytes={edid_bytes}, modes={len(modes)}" +
                          (f", link_status={link_status}" if link_status else ""))
             if status == "connected":
                 any_connected = True
                 if len(modes) == 0:
-                    lines.append(f"[WARN] {ci['name']}: connected but no modes (EDID/AUX/DDC/link issue)")
+                    print(f"[WARN] {ci['name']}: connected but no modes (EDID/AUX/DDC/link issue)")
                 if edid_bytes in ("0", "", "?"):
-                    lines.append(f"[WARN] {ci['name']}: EDID size suspicious (edid_bytes={edid_bytes})")
+                    print(f"[WARN] {ci['name']}: EDID size suspicious (edid_bytes={edid_bytes})")
                 if link_status and link_status.lower() != "good":
-                    lines.append(f"[WARN] {ci['name']}: link_status={link_status}")
+                    print(f"[WARN] {ci['name']}: link_status={link_status}")
 
     if any_connected:
-        lines.append("[OK] At least one connector is connected")
+        print("[OK] At least one connector is connected")
     else:
-        lines.append("[WARN] No connectors report connected (if you expect display: cable/hotplug/link training)")
+        print("[WARN] No connectors report connected (if you expect display: cable/hotplug/link training)")
 
     # 6) runtime checkiong
     card = pick_primary_card()
@@ -533,7 +534,7 @@ def run_flow_kms() -> Tuple[int, List[str]]:
         print(psr_alpm)
 
     # Exit: fail only if major KMS prerequisites are missing
-    return 0, lines
+    return 0
 
 
 # ------------------------- main -------------------------
@@ -554,11 +555,10 @@ def main() -> int:
         # logging.error("The system run with nomodeset but we expected KMS.")
         # raise SystemExit("FAIL: RPMSG channel is not created") 
     elif nomodeset:
-        rc, lines = run_flow_nomodeset()
+        rc = run_flow_nomodeset()
     else:
-        rc, lines = run_flow_kms()
+        rc = run_flow_kms()
 
-    print("\n".join(lines))
     return rc
 
 
