@@ -105,7 +105,10 @@ def list_dri_debug_cards() -> List[int]:
     out = []
     for p in DRI_DEBUGFS.iterdir():
         if p.is_dir() and p.name.isdigit():
-            out.append(int(p.name))
+            with open(f"{p}/state") as f:
+                active = "active=1" in f.read()
+            if active:
+                out.append(int(p.name))
     return sorted(out)
 
 def pick_primary_card() -> Optional[int]:
@@ -524,7 +527,7 @@ def run_flow_kms():
         print("[WARN] no /sys/kernel/debug/dri/<N> found")
         return 2
     else:
-        flips = check_framebuffer_flips(card, samples=10, interval_s=0.2)
+        flips = check_framebuffer_flips(card, samples=10, interval_s=2)
         print(flips)
 
         vb = check_vblank_events(card, interval_s=0.5)
