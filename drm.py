@@ -95,21 +95,25 @@ def ensure_debugfs_ready() -> Tuple[bool, str]:
     return True, "ok"
 
 def list_dri_debug_cards() -> List[int]:
-    if not DRI_DEBUGFS.is_dir():
-        return []
-    out = []
-    for p in DRI_DEBUGFS.iterdir():
-        active = 0
-        if p.is_dir() and p.name.isdigit():
-            try:
-                with open(f"{p}/state") as f:
-                    active = "active=1" in f.read()
-            except FileNotFoundError:
-                pass
-
-            if active:
-                out.append(int(p.name))
-    return sorted(out)
+    try:
+        if not DRI_DEBUGFS.is_dir():
+            return []
+        out = []
+        for p in DRI_DEBUGFS.iterdir():
+            active = 0
+            if p.is_dir() and p.name.isdigit():
+                try:
+                    with open(f"{p}/state") as f:
+                        active = "active=1" in f.read()
+                except FileNotFoundError:
+                    pass
+    
+                if active:
+                    out.append(int(p.name))
+        return sorted(out)
+    except PermissionError:
+        print("permission denied (run as root):")
+        return None
 
 def pick_primary_card() -> Optional[int]:
     # Simple heuristic: pick lowest card index in debugfs.
@@ -219,10 +223,9 @@ def capture_drm_trace(
 
         return line_count
 
-    except PermissionError as e:
-        return TraceCaptureResult(False, [], 0, "", -1, "", f"permission denied (run as root): {e}")
-    except Exception as e:
-        return TraceCaptureResult(False, [], 0, "", -1, "", f"error: {e}")
+    except PermissionError:
+        print(f"permission denied (run as root)")
+        return
 
 # --------------------------- check framebuffer flip------------------------------
 
