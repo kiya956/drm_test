@@ -178,6 +178,7 @@ def check_vblank_events(card: int, interval_s: float = 0.5) -> VBlankResult:
 
 # --------------------------- check framebuffer flip------------------------------
 
+@dataclass
 class FlipResult:
     supported: bool
     flips_seen: int
