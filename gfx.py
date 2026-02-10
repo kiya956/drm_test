@@ -104,9 +104,14 @@ def list_dri_debug_cards() -> List[int]:
         return []
     out = []
     for p in DRI_DEBUGFS.iterdir():
+        active = 0
         if p.is_dir() and p.name.isdigit():
-            with open(f"{p}/state") as f:
-                active = "active=1" in f.read()
+            try:
+                with open(f"{p}/state") as f:
+                    active = "active=1" in f.read()
+            except FileNotFoundError:
+                pass
+
             if active:
                 out.append(int(p.name))
     return sorted(out)
