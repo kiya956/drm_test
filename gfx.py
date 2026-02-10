@@ -232,13 +232,6 @@ def capture_drm_trace(
 
 # --------------------------- check framebuffer flip------------------------------
 
-@dataclass
-class FlipResult:
-    supported: bool
-    flips_seen: int
-    samples: int
-    details: str
-
 _FB_RE = re.compile(r"\bfb=([0-9]+)\b")
 
 def _extract_fb_ids_from_state(state_text: str) -> List[int]:
@@ -269,8 +262,7 @@ def check_framebuffer_flips(card: int, samples: int = 10, interval_s: float = 0.
         if cur != prev:
             flips += 1
             prev = cur
-    print(FlipResult(True, flips, samples, f"state={state_path} (fb ids change count)"))
-    return
+    return flips
 
 # --------------------------check PHY power state and Panel power state-
 
@@ -584,7 +576,10 @@ def run_flow_kms():
             print(f"[FAIL] no vblan found")
 
         flips = check_framebuffer_flips(card, samples=10, interval_s=2)
-        print(flips)
+        if flips:
+            print(f"[PASS] check framebuffer flips count: {flips}")
+        else:
+            print("[FAIL] framebuffer has no flips")
 
         psr_alpm = check_psr_alpm_state(card)
         print(psr_alpm)
